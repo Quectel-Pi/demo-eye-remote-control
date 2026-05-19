@@ -106,56 +106,42 @@
 ## 🚀 安装与运行
 
 ### 安装步骤
-#### 配置python环境
-   目前系统默认的python版本为3.13，而我们使用的MediaPipe模型需要的开发环境在python3.9-3.12，需要重新指定python路径，系统中已经安装了python3.10，我们修改python默认路径即可。
 
-```bash 
-#备份当前Python路径链接
-sudo cp /usr/bin/python3 /usr/bin/python3.backup
-#删除当前Python路径链接
-sudo rm /usr/bin/python3
-# 创建新的路径链接指向Python 3.10
-sudo ln -s /usr/bin/python3.10 /usr/bin/python3
-#验证修改，输出为Python 3.10.15版本即配置成功
-ls -l /usr/bin/python3
-python3 --version
-```
-#### 克隆项目代码：
+1.在智能主控板终端下新建eye-remote-control文件夹存放项目代码。
+
 ```bash
-git clone <repository-url>
-cd demo-eye-remote-control
+mkdir eye-remote-control
+cd eye-remote-control
 ```
 
-#### 创建虚拟环境（推荐）：
-```bash
-python3 -m venv ~/mediapipe_env
-source ~/mediapipe_env/bin/activate
-```
+2.使用git命令克隆项目代码。
 
-#### 更新pip源：
-```bash
-pip install --upgrade pip
-```
-
-#### 安装依赖：
-```bash
-pip install -r requirements.txt
-```
-
-#### 安装ffmpeg
 ```bash
 sudo apt update
-sudo apt install -y ffmpeg
+#安装git
+sudo apt install -y git
+#克隆项目代码
+git clone https://github.com/Quectel-Pi/demo-eye-remote-control.git
 ```
+
+3.在智能主控板的终端下依次执行下面命令。
+
+```bash
+cd demo-eye-remote-control
+#设置脚本权限
+sudo chmod 755 install.sh
+#执行脚本
+./install.sh #终端显示"Deployment complete"则说明部署完成
+#重新打开终端,验证python版本
+python3 --version #输出“Python 3.10.15”则表示安装成功
+```
+
 
 #### 运行程序：
-```bash
-python3 main.py
-```
+在demo-eye-remote-control路径下输入`./start.sh`执行程序启动脚本。
 
-或者使用启动脚本：
 ```bash
-chmod +x start.sh
+cd eye-remote-control/demo-eye-remote-control/
 ./start.sh
 ```
 
@@ -210,6 +196,7 @@ eye-remote-control/
 ├── README.md                   # 中文项目说明文档
 ├── README_en.md                # 英文项目说明文档
 ├── requirements.txt            # 依赖包列表
+├── install.sh                  # 部署环境脚本
 └── start.sh                    # 启动脚本
 ```
 
