@@ -104,57 +104,40 @@ System supports smart playlist management:
 
 ### Installation Steps
 
-#### Configure Python Environment
-Currently, the system's default Python version is 3.13, while the MediaPipe model we use requires a development environment compatible with Python 3.9-3.12. We need to specify the Python path again. Python 3.10 is already installed in the system, so we only need to modify the default Python path.
+1. Create the `eye-remote-control` folder on the board's terminal to store the project code.
 
-```bash 
-# Backup current Python path link
-sudo cp /usr/bin/python3 /usr/bin/python3.backup
-# Remove current Python path link
-sudo rm /usr/bin/python3
-# Create new path link pointing to Python 3.10
-sudo ln -s /usr/bin/python3.10 /usr/bin/python3
-# Verify modification, output should show Python 3.10.15 version for successful configuration
-ls -l /usr/bin/python3
-python3 --version
-```
-
-#### Clone the project:
 ```bash
-git clone <repository-url>
-cd demo-eye-remote-control
+mkdir eye-remote-control
+cd eye-remote-control
 ```
 
-#### Create virtual environment (recommended):
-```bash
-python3 -m venv ~/mediapipe_env
-source ~/mediapipe_env/bin/activate
-```
+2. Clone the project using git.
 
-#### Upgrade pip:
-```bash
-pip install --upgrade pip
-```
-
-#### Install dependencies:
-```bash
-pip install -r requirements.txt
-```
-
-#### Install ffmpeg
 ```bash
 sudo apt update
-sudo apt install -y ffmpeg
+# Install git
+sudo apt install -y git
+# Clone the project
+git clone https://github.com/Quectel-Pi/demo-eye-remote-control.git
+```
+
+3. Run the following commands in sequence on the board's terminal.
+
+```bash
+cd demo-eye-remote-control
+# Set script permissions
+sudo chmod 755 install.sh
+# Execute the script
+./install.sh  # "Deployment complete" in the terminal indicates successful deployment
+# Reopen the terminal and verify the Python version
+python3 --version  # Output "Python 3.10.15" indicates successful installation
 ```
 
 #### Run the program:
+In the `demo-eye-remote-control` directory, run the startup script with `./start.sh`.
+
 ```bash
-cd demo-eye-remote-control/src
-python3 main.py
-```
-Alternatively, use the startup script:
-```bash 
-chmod +x start.sh
+cd eye-remote-control/demo-eye-remote-control/
 ./start.sh
 ```
 ### First-time Setup
@@ -194,17 +177,19 @@ chmod +x start.sh
 
 ```
 eye-remote-control/
-├──assets                      # Static resources
+├── assets/                     # Static resources
 ├── src/                        # Source code directory
 │   ├── eye_detector.py         # Core eye detection logic
 │   ├── video_capture.py        # Video capture thread
 │   ├── video_player.py         # Video player thread
 │   ├── fullscreen_player_mode.py  # Fullscreen playback interface
 │   ├── log.py                  # Logging module
-│   ├──main.py                  # Main program entry
-├── README.md                   # Chinese project documentation
-├── README_en.md                # English project documentation
+│   └── main.py                 # Main program entry
+├── README.md                   # English project documentation
+├── README_zh.md                # Chinese project documentation
 ├── requirements.txt            # Dependency list
+├── install.sh                  # Environment deployment script
+└── start.sh                    # Startup script
 ```
 
 ## 🛠️ Configuration Parameters
