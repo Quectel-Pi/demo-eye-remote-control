@@ -104,42 +104,63 @@ System supports smart playlist management:
 
 ### Installation Steps
 
-1. Create the `eye-remote-control` folder on the board's terminal to store the project code.
-
-```bash
-mkdir eye-remote-control
-cd eye-remote-control
-```
-
-2. Clone the project using git.
+1. Clone the project using git.
 
 ```bash
 sudo apt update
-# Install git
 sudo apt install -y git
-# Clone the project
 git clone https://github.com/Quectel-Pi/demo-eye-remote-control.git
 ```
 
-3. Run the following commands in sequence on the board's terminal.
+After execution, a `demo-eye-remote-control` folder should be created in the current directory.
+
+2. Run the following commands in sequence on the board's terminal. If the terminal shows `Deployment complete`, deployment is successful.
 
 ```bash
 cd demo-eye-remote-control
-# Set script permissions
 sudo chmod 755 install.sh
-# Execute the script
-./install.sh  # "Deployment complete" in the terminal indicates successful deployment
-# Reopen the terminal and verify the Python version
-python3 --version  # Output "Python 3.10.15" indicates successful installation
+./install.sh
 ```
 
-#### Run the program:
-In the `demo-eye-remote-control` directory, run the startup script with `./start.sh`.
+If an error occurs while running `./install.sh`, or the terminal does not show `Deployment complete`, do not continue to the next steps yet. Re-run the installation script from the project root and make sure network connectivity is normal.
+
+3. Reopen the terminal and verify the Python version. If the output is `Python 3.10.15`, the installation is successful.
+
+```bash
+python3 --version
+```
+
+#### Run Program
+
+Run the `./start.sh` startup script in the `demo-eye-remote-control` directory.
+
+```bash
+cd demo-eye-remote-control/
+./start.sh
+```
+
+### Enable Auto-start at Boot (Optional)
+
+This project provides `setup_autostart.sh` to configure a user-level systemd service.
 
 ```bash
 cd eye-remote-control/demo-eye-remote-control/
-./start.sh
+./setup_autostart.sh install
 ```
+
+Service management:
+
+```bash
+./setup_autostart.sh status
+./setup_autostart.sh uninstall
+```
+
+Logs:
+
+```bash
+journalctl --user -u eye-remote-control -f
+```
+
 ### First-time Setup
 
 1. Ensure camera is properly connected to the device
@@ -176,7 +197,7 @@ cd eye-remote-control/demo-eye-remote-control/
 ## 📁 Project Structure
 
 ```
-eye-remote-control/
+demo-eye-remote-control/
 ├── assets/                     # Static resources
 ├── src/                        # Source code directory
 │   ├── eye_detector.py         # Core eye detection logic
@@ -189,6 +210,7 @@ eye-remote-control/
 ├── README_zh.md                # Chinese project documentation
 ├── requirements.txt            # Dependency list
 ├── install.sh                  # Environment deployment script
+├── setup_autostart.sh          # Auto-start setup script
 └── start.sh                    # Startup script
 ```
 
@@ -206,4 +228,5 @@ Main configurable parameters in [src/eye_detector.py](src/eye_detector.py):
 | `BLINK_FRAME_THRESHOLD` | 4 | Blink duration threshold (frames) |
 
 ##  Reporting Issues
+If you encounter any issues during use, please submit technical inquiries on the [Quectel Official Forum](https://forumschinese.quectel.com/t/topic/12199). Our technical support team will respond promptly.
 Feel free to submit Issues and Pull Requests to improve this project.
