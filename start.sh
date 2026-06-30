@@ -1,16 +1,20 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "${APP_DIR}"
 
 echo "Activate the eye controller..."
+echo "Starting application..."
 
-# Check virtual environment
-if [ -d "$HOME/mediapipe_env" ]; then
-    echo "Activate virtual environment..."
-    source "$HOME/mediapipe_env/bin/activate"
+# Prefer pyenv interpreter installed by install.sh so runtime modules (e.g. cv2) are available.
+if [[ -x "${HOME}/.pyenv/shims/python3" ]]; then
+	PYTHON_BIN="${HOME}/.pyenv/shims/python3"
+elif command -v python3 >/dev/null 2>&1; then
+	PYTHON_BIN="$(command -v python3)"
 else
-    echo "Virtual environment not found, using system Python environment"
+	echo "python3 not found"
+	exit 1
 fi
 
-echo "Starting application..."
-python3 ./src/main.py
-
-echo "Application exited"
+"${PYTHON_BIN}" ./src/main.py
