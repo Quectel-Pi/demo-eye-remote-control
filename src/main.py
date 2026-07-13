@@ -1,13 +1,14 @@
+import os
 import sys
 import cv2
-import os
 import time
 from datetime import datetime
+os.environ["QT_LOGGING_RULES"] = "qt.pointer.dispatch=false"
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QPushButton, QVBoxLayout, 
     QHBoxLayout, QFileDialog, QMessageBox, QGroupBox, QCheckBox, QFrame,
-    QSplitter, QGridLayout, QSlider,
+    QSplitter, QGridLayout, QSlider, QSizePolicy,
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QImage, QPixmap
@@ -59,11 +60,6 @@ class MainWindow(QMainWindow):
         # Start video player thread
         self.video_player_thread.start()
         
-        # Status update timer
-        self.status_timer = QTimer()
-        self.status_timer.timeout.connect(self.update_status)
-        self.status_timer.start(500)
-        
         # Video progress update timer
         self.progress_timer = QTimer()
         self.progress_timer.timeout.connect(self.update_progress)
@@ -96,7 +92,7 @@ class MainWindow(QMainWindow):
                 color: #cdd6f4;
                 border: none;
                 border-radius: 6px;
-                padding: 8px 16px;
+                padding: 6px 16px;
                 font-weight: bold;
             }
             QPushButton:hover {
@@ -207,20 +203,21 @@ class MainWindow(QMainWindow):
         
         # Fullscreen button
         self.fullscreen_btn = QPushButton("Fullscreen")
-        self.fullscreen_btn.setFixedSize(int(window_width * 0.12), 30)
+        self.fullscreen_btn.setFixedSize(int(window_width * 0.15), 30)
         self.fullscreen_btn.clicked.connect(self.toggle_fullscreen)
         self.fullscreen_btn.setStyleSheet("""
             QPushButton {
                 background-color: #89b4fa;
                 color: #1e1e2e;
                 font-weight: bold;
+                text-align: center;
             }
             QPushButton:hover {
                 background-color: #74c7ec;
             }
         """)
          #  Fullscreen play button
-        self.fullscreen_play_btn = QPushButton("🎬 Fullscreen Play Mode")
+        self.fullscreen_play_btn = QPushButton("Fullscreen Play Mode")
         self.fullscreen_play_btn.setFixedSize(int(window_width * 0.15), 30)
         self.fullscreen_play_btn.clicked.connect(self.enter_fullscreen_play_mode)
         self.fullscreen_play_btn.setStyleSheet("""
@@ -228,6 +225,7 @@ class MainWindow(QMainWindow):
                 background-color: #89b4fa;
                 color: #1e1e2e;
                 font-weight: bold;
+                text-align: center;
             }
             QPushButton:hover {
                 background-color: #74c7ec;
@@ -273,8 +271,10 @@ class MainWindow(QMainWindow):
         video_group = QGroupBox("🎬 Video Player")
         video_layout = QVBoxLayout()
         
-        self.video_display = QLabel("Please select a video file")
+        self.video_display = QLabel("Click select a video file")
         self.video_display.setAlignment(Qt.AlignCenter)
+        self.video_display.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.video_display.mousePressEvent = self.select_video_from_display
         # Use relative dimensions instead of fixed sizes
         self.video_display.setMinimumSize(int(window_width * 0.4), int(window_height * 0.3))
         self.video_display.setStyleSheet("""
@@ -308,15 +308,15 @@ class MainWindow(QMainWindow):
         
         self.video_play_btn = QPushButton("Play")
         self.video_play_btn.clicked.connect(self.play_video)
-        self.video_play_btn.setFixedSize(int(window_width * 0.06), 30)
+        self.video_play_btn.setFixedSize(int(window_width * 0.15), 30)
         
         self.video_pause_btn = QPushButton("Pause")
         self.video_pause_btn.clicked.connect(self.pause_video)
-        self.video_pause_btn.setFixedSize(int(window_width * 0.06), 30)
+        self.video_pause_btn.setFixedSize(int(window_width * 0.15), 30)
         
         self.video_stop_btn = QPushButton("Stop")
         self.video_stop_btn.clicked.connect(self.stop_video)
-        self.video_stop_btn.setFixedSize(int(window_width * 0.06), 30)
+        self.video_stop_btn.setFixedSize(int(window_width * 0.15), 30)
         
         control_layout.addWidget(self.time_label)
         control_layout.addStretch()
@@ -341,6 +341,8 @@ class MainWindow(QMainWindow):
 
         screen_show_group = QGroupBox()
         screen_show_layout = QGridLayout()
+        screen_show_layout.setColumnStretch(0, 1)
+        screen_show_layout.setColumnStretch(1, 1)
         screen_show_layout.addWidget(self.fullscreen_play_btn, 0, 0)
         screen_show_layout.addWidget(self.fullscreen_btn, 0, 1)
         screen_show_group.setLayout(screen_show_layout)
@@ -510,9 +512,6 @@ class MainWindow(QMainWindow):
         
         main_layout.addWidget(content_splitter)
         
-        # Status bar
-        self.statusBar().showMessage("Ready")
-        
         # Setup fullscreen shortcut
         self.fullscreen_btn.setShortcut("F11")
         
@@ -586,9 +585,15 @@ class MainWindow(QMainWindow):
     def toggle_landmarks(self, state):
         self.video_thread.toggle_landmarks(state == Qt.CheckState.Checked.value)
         
+    def select_video_from_display(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.select_video()
+
     def select_video(self):
+        assets_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "assets"))
+        initial_dir = assets_dir if os.path.isdir(assets_dir) else ""
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Select Video File", "", "Video Files (*.mp4 *.avi *.mov *.mkv *.flv *.wmv *.MP4 *.AVI *.MOV *.MKV *.FLV *.WMV)")
+            self, "Select Video File", initial_dir, "Video Files (*.mp4 *.avi *.mov *.mkv *.flv *.wmv *.MP4 *.AVI *.MOV *.MKV *.FLV *.WMV)")
         
         if file_path:
             self.current_video_file = file_path
@@ -925,11 +930,6 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Error occurred while finding next video")
       
         
-    def update_status(self):
-        """Update status information"""
-        current_time = datetime.now().strftime("%H:%M:%S")
-        self.statusBar().showMessage(f"Ready | {current_time}")
-        
     def toggle_fullscreen(self):
         """Toggle fullscreen mode"""
         if self.is_fullscreen:
@@ -1050,7 +1050,7 @@ class MainWindow(QMainWindow):
             self.video_display.setMinimumSize(int(new_width * 0.4), int(new_height * 0.3))
             
             # Update button sizes
-            self.fullscreen_btn.setFixedSize(int(new_width * 0.12), 30)
+            self.fullscreen_btn.setFixedSize(int(new_width * 0.15), 30)
             self.fullscreen_play_btn.setFixedSize(int(new_width * 0.15), 30)
             self.video_play_btn.setFixedSize(int(new_width * 0.06), 30)
             self.video_pause_btn.setFixedSize(int(new_width * 0.06), 30)
