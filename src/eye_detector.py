@@ -22,11 +22,16 @@ class MediaPipeEyeDetector:
         
         # Nose key point indices (for head stability detection)
         self.NOSE_INDICES = [1, 4, 6, 168, 197, 195, 5]
+        self.LEFT_IRIS_INDICES = [468, 469, 470, 471, 472]
+        self.RIGHT_IRIS_INDICES = [473, 474, 475, 476, 477]
         
         # Configuration parameters
         self.GAZING_STABILITY_THRESHOLD = 35  # Gaze stability threshold
         self.GAZING_CONFIRMATION_FRAMES = 12  # Continuous frames required to confirm gaze (lower requirement)
         self.GAZING_BREAK_FRAMES = 15  # Continuous unstable frames required to break gaze (higher requirement)
+        self.FACE_TURN_THRESHOLD = 0.35  # Maximum nose offset relative to eye distance for frontal face
+        self.IRIS_CENTER_MIN = 0.30  # Iris should stay near eye center to count as looking at screen
+        self.IRIS_CENTER_MAX = 0.70
         
         self.EAR_BLINK_THRESHOLD = 0.18  # Blink threshold
         self.EAR_OPEN_THRESHOLD = 0.25  # Threshold for fully open eyes
@@ -97,6 +102,18 @@ class MediaPipeEyeDetector:
         x_variance = np.var([p[0] for p in positions])
         y_variance = np.var([p[1] for p in positions])
         return x_variance + y_variance
+
+    def calculate_iris_center_ratio(self, eye_landmarks, iris_landmarks):
+        """Calculate iris position ratio between the two eye corners."""
+        eye_start = eye_landmarks[0]
+        eye_end = eye_landmarks[3]
+        eye_axis = eye_end - eye_start
+        axis_length = np.dot(eye_axis, eye_axis)
+        if axis_length == 0:
+            return 0.5
+
+        iris_center = np.mean(iris_landmarks, axis=0)
+        return float(np.dot(iris_center - eye_start, eye_axis) / axis_length)
     
     def update_eye_state(self, avg_ear):
         """Update eye state machine"""
@@ -139,9 +156,9 @@ class MediaPipeEyeDetector:
                 
         return self.eye_state
     
-    def update_gazing_state(self, position_variance):
+    def update_gazing_state(self, position_variance, can_confirm_gaze=True):
         """Update gaze state machine based on position variance"""
-        is_stable = position_variance < self.GAZING_STABILITY_THRESHOLD
+        is_stable = can_confirm_gaze and position_variance < self.GAZING_STABILITY_THRESHOLD
         
         if self.gazing_state == "not_gazing":
             if is_stable:
@@ -194,6 +211,11 @@ class MediaPipeEyeDetector:
             'avg_ear': 0,
             'eye_center': None,
             'position_variance': 1000,
+            'face_forward': False,
+            'face_turn_ratio': 1.0,
+            'iris_centered': False,
+            'left_iris_ratio': 0.5,
+            'right_iris_ratio': 0.5,
             'fps': self.fps
         }
         
@@ -228,6 +250,8 @@ class MediaPipeEyeDetector:
         left_eye_points = []
         right_eye_points = []
         nose_points = []
+        left_iris_points = []
+        right_iris_points = []
         
         # Left eye landmarks
         for idx in self.LEFT_EYE_INDICES:
@@ -246,6 +270,17 @@ class MediaPipeEyeDetector:
             landmark = face_landmarks.landmark[idx]
             x, y = int(landmark.x * w), int(landmark.y * h)
             nose_points.append(np.array([x, y]))
+
+        if len(face_landmarks.landmark) > max(self.RIGHT_IRIS_INDICES):
+            for idx in self.LEFT_IRIS_INDICES:
+                landmark = face_landmarks.landmark[idx]
+                x, y = int(landmark.x * w), int(landmark.y * h)
+                left_iris_points.append(np.array([x, y]))
+
+            for idx in self.RIGHT_IRIS_INDICES:
+                landmark = face_landmarks.landmark[idx]
+                x, y = int(landmark.x * w), int(landmark.y * h)
+                right_iris_points.append(np.array([x, y]))
         
         # Calculate Eye Aspect Ratio
         left_ear = self.calculate_ear(left_eye_points)
@@ -303,6 +338,24 @@ class MediaPipeEyeDetector:
         
         # Calculate nose center position
         nose_center = np.mean(nose_points, axis=0).astype(int)
+
+        eye_distance = np.linalg.norm(left_eye_center - right_eye_center)
+        face_turn_ratio = abs(nose_center[0] - eye_center[0]) / eye_distance if eye_distance > 0 else 1.0
+        face_forward = face_turn_ratio <= self.FACE_TURN_THRESHOLD
+        detection_result['face_turn_ratio'] = face_turn_ratio
+        detection_result['face_forward'] = face_forward
+
+        iris_centered = True
+        if left_iris_points and right_iris_points:
+            left_iris_ratio = self.calculate_iris_center_ratio(left_eye_points, left_iris_points)
+            right_iris_ratio = self.calculate_iris_center_ratio(right_eye_points, right_iris_points)
+            iris_centered = (
+                self.IRIS_CENTER_MIN <= left_iris_ratio <= self.IRIS_CENTER_MAX and
+                self.IRIS_CENTER_MIN <= right_iris_ratio <= self.IRIS_CENTER_MAX
+            )
+            detection_result['left_iris_ratio'] = left_iris_ratio
+            detection_result['right_iris_ratio'] = right_iris_ratio
+        detection_result['iris_centered'] = iris_centered
         
         # Record position history
         current_time = time.time()
@@ -316,8 +369,13 @@ class MediaPipeEyeDetector:
             position_variance = (eye_variance + nose_variance) / 2.0
             detection_result['position_variance'] = position_variance
             
-            # Update gaze state (simplified version, does not consider blinking)
-            gazing_state = self.update_gazing_state(position_variance)
+            can_confirm_gaze = (
+                eye_state == "open" and
+                not detection_result['eyes_closed'] and
+                face_forward and
+                iris_centered
+            )
+            gazing_state = self.update_gazing_state(position_variance, can_confirm_gaze)
             detection_result['gazing_state'] = gazing_state
             detection_result['is_gazing'] = (gazing_state == "gazing")
         else:

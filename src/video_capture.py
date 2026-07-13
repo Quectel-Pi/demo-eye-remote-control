@@ -24,6 +24,9 @@ class VideoCaptureThread(QThread):
         self.exiting = False
         self._closed = True  # Track whether resources have been released
         self._lock = threading.RLock()  # Reentrant lock for resource protection
+        self.camera_id = None
+        self.reconnect_interval = 2.0
+        self._last_reconnect_attempt = 0.0
 
         # Component initialization
         self.eye_detector = MediaPipeEyeDetector()
@@ -64,27 +67,60 @@ class VideoCaptureThread(QThread):
         if camera_id is None:
             camera_id = self.find_available_camera()
             if camera_id is None:
-                raise Exception("No available camera device found")
+                error("No available camera device found, waiting for camera reconnect")
 
         #debug(f"Starting camera capture on device ID: {camera_id}")
-        
+
         # Release existing capture if any
-        self._safe_release_capture()
-        
+        self._release_capture_only()
+
         with self._lock:
-            self.cap = cv2.VideoCapture(camera_id)
-            if self.cap.isOpened():
-                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                self.cap.set(cv2.CAP_PROP_FPS, 30)
-                self._closed = False
+            self.camera_id = camera_id
+            self.exiting = False
+        if camera_id is not None:
+            self._open_capture(camera_id)
 
         with self._lock:
             self.running = True
             self.frame_count = 0
             self.fps = 0
             self.last_fps_time = time.time()
-        self.start()
+        if not self.isRunning():
+            self.start()
+
+    def _open_capture(self, camera_id):
+        cap = cv2.VideoCapture(camera_id)
+        if not (cap and cap.isOpened()):
+            try:
+                if cap is not None:
+                    cap.release()
+            except Exception:
+                pass
+            return False
+
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        cap.set(cv2.CAP_PROP_FPS, 30)
+        with self._lock:
+            self._release_capture_only()
+            self.cap = cap
+            self._closed = False
+            self.camera_id = camera_id
+        #debug(f"Camera connected on device ID: {camera_id}")
+        return True
+
+    def _release_capture_only(self):
+        with self._lock:
+            if self.cap is not None:
+                try:
+                    self.cap.release()
+                except Exception as e:
+                    error(f"Error releasing camera capture: {e}")
+                finally:
+                    self.cap = None
+                    self._closed = True
+            else:
+                self._closed = True
 
     def stop_capture(self):
         #debug("Stopping camera capture...")
@@ -132,33 +168,46 @@ class VideoCaptureThread(QThread):
             self.show_landmarks = show
 
     def run(self):
+        read_failures = 0
         while True:
             # Check exit conditions
             should_continue = False
+            cap_ready = False
             with self._lock:
-                if (self.running and self.cap is not None and not self._closed):
-                    try:
-                        should_continue = self.cap.isOpened()
-                    except:
-                        should_continue = False
-                    
+                should_continue = self.running and not self.exiting
+                cap_ready = self.cap is not None and not self._closed
+                camera_id = self.camera_id
+
             if not should_continue:
                 break
-                
+
+            if not cap_ready:
+                current_time = time.time()
+                if current_time - self._last_reconnect_attempt >= self.reconnect_interval:
+                    self._last_reconnect_attempt = current_time
+                    next_camera_id = camera_id
+                    if next_camera_id is None:
+                        next_camera_id = self.find_available_camera()
+                    if next_camera_id is not None:
+                        self._open_capture(next_camera_id)
+                time.sleep(0.1)
+                continue
+
             try:
                 ret, frame = None, None
                 cap_valid = False
                 with self._lock:
                     cap_valid = self.cap is not None and not self._closed
-                    
+
                 if cap_valid:
                     try:
                         ret, frame = self.cap.read()
                     except Exception as e:
                         error(f"Error reading frame: {e}")
                         ret = False
-                        
+
                 if ret and frame is not None:
+                    read_failures = 0
                     # Calculate FPS
                     with self._lock:
                         self.frame_count += 1
@@ -176,7 +225,7 @@ class VideoCaptureThread(QThread):
                     detecting_enabled = False
                     with self._lock:
                         detecting_enabled = self.detecting
-                        
+
                     if detecting_enabled:
                         try:
                             # Detect eye state
@@ -185,7 +234,7 @@ class VideoCaptureThread(QThread):
                             # Emit detection status
                             self.detection_status.emit(detection_result)
 
-                            # When playing video, continue playing if eyes are gazing at screen, 
+                            # When playing video, continue playing if eyes are gazing at screen,
                             command = None
                             face_detected = detection_result.get('face_detected', False)
 
@@ -217,7 +266,7 @@ class VideoCaptureThread(QThread):
                             show_landmarks = False
                             with self._lock:
                                 show_landmarks = self.show_landmarks
-                                
+
                             if show_landmarks and face_detected:
                                 self.eye_detector.draw_landmarks(processed_frame, detection_result)
 
@@ -241,9 +290,12 @@ class VideoCaptureThread(QThread):
 
                     time.sleep(0.03)  # ~30 FPS
                 else:
-                    # If we can't read a frame, stop the capture
-                    error("Cannot read frame from camera, stopping capture")
-                    break
+                    read_failures += 1
+                    if read_failures >= 30:
+                        error("Cannot read frame from camera, waiting for reconnect")
+                        self._release_capture_only()
+                        read_failures = 0
+                    time.sleep(0.03)
             except Exception as e:
                 error(f"Error in camera capture loop: {e}")
                 break
