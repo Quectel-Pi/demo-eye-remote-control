@@ -12,8 +12,8 @@ class MediaPipeEyeDetector:
         self.face_mesh = self.mp_face_mesh.FaceMesh(
             max_num_faces=1,
             refine_landmarks=True,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5
+            min_detection_confidence=0.4,
+            min_tracking_confidence=0.4
         )        
         
         # Indices of 6 key points for standard EAR calculation
@@ -27,9 +27,10 @@ class MediaPipeEyeDetector:
         
         # Configuration parameters
         self.GAZING_STABILITY_THRESHOLD = 35  # Gaze stability threshold
-        self.GAZING_CONFIRMATION_FRAMES = 12  # Continuous frames required to confirm gaze (lower requirement)
-        self.GAZING_BREAK_FRAMES = 15  # Continuous unstable frames required to break gaze (higher requirement)
+        self.GAZING_CONFIRMATION_FRAMES = 4  # Continuous frames required to confirm gaze (optimized for 1-2s response)
+        self.GAZING_BREAK_FRAMES = 13  # Continuous unstable frames required to break gaze (optimized for faster response)
         self.FACE_TURN_THRESHOLD = 0.35  # Maximum nose offset relative to eye distance for frontal face
+        self.FACE_VERTICAL_THRESHOLD = 0.3  # Nose must be below eye center by at least this ratio (prevents head-up false gaze)
         self.IRIS_CENTER_MIN = 0.30  # Iris should stay near eye center to count as looking at screen
         self.IRIS_CENTER_MAX = 0.70
         
@@ -345,6 +346,12 @@ class MediaPipeEyeDetector:
         detection_result['face_turn_ratio'] = face_turn_ratio
         detection_result['face_forward'] = face_forward
 
+        # Vertical tilt check: nose should be below eye center (image y increases downward)
+        # When head tilts up, nose rises in image and this ratio drops below threshold
+        face_vertical_ratio = (nose_center[1] - eye_center[1]) / eye_distance if eye_distance > 0 else 0.0
+        face_not_tilted_up = face_vertical_ratio > self.FACE_VERTICAL_THRESHOLD
+        detection_result['face_vertical_ratio'] = face_vertical_ratio
+
         iris_centered = True
         if left_iris_points and right_iris_points:
             left_iris_ratio = self.calculate_iris_center_ratio(left_eye_points, left_iris_points)
@@ -373,6 +380,7 @@ class MediaPipeEyeDetector:
                 eye_state == "open" and
                 not detection_result['eyes_closed'] and
                 face_forward and
+                face_not_tilted_up and
                 iris_centered
             )
             gazing_state = self.update_gazing_state(position_variance, can_confirm_gaze)
@@ -386,6 +394,12 @@ class MediaPipeEyeDetector:
     
     def draw_landmarks(self, frame, detection_result):
         """Draw landmarks and information on the frame"""
+        # Use consistent spacing for overlay text blocks to avoid crowded status lines.
+        bottom_margin = 36
+        bottom_line_gap = 34
+        right_panel_top = 36
+        right_line_gap = 42
+
         if detection_result['eye_center']:
             center_x, center_y = detection_result['eye_center']
             
@@ -394,16 +408,18 @@ class MediaPipeEyeDetector:
                 # Green circle indicates gaze state
                 cv2.circle(frame, (center_x, center_y), 30, (0, 255, 0), 3)
                 cv2.putText(frame, "GAZING", (center_x - 40, center_y - 40),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                           cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 3)
             else:
                 # Red circle indicates not gazing
                 cv2.circle(frame, (center_x, center_y), 30, (0, 0, 255), 2)
         
         # Display EAR value and eye state
         if detection_result['left_ear'] > 0 and detection_result['right_ear'] > 0:
+            base_bottom_y = frame.shape[0] - bottom_margin
+
             # Display average EAR
-            cv2.putText(frame, f"EAR: {detection_result['avg_ear']:.3f}", (10, frame.shape[0] - 150),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            cv2.putText(frame, f"EAR: {detection_result['avg_ear']:.3f}", (10, base_bottom_y - bottom_line_gap * 3),
+                       cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 3)
             
             # Display eye state
             state = detection_result['eye_state']
@@ -423,8 +439,8 @@ class MediaPipeEyeDetector:
                 status_color = (255, 255, 255)
                 status_text = state
             
-            cv2.putText(frame, f"Eyes: {status_text}", (10, frame.shape[0] - 120),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, status_color, 2)
+            cv2.putText(frame, f"Eyes: {status_text}", (10, base_bottom_y - bottom_line_gap * 2),
+                       cv2.FONT_HERSHEY_SIMPLEX, 1.0, status_color, 3)
             
             # Display gaze state
             gazing_state = detection_result['gazing_state']
@@ -432,30 +448,31 @@ class MediaPipeEyeDetector:
                 gaze_color = (0, 255, 0)
                 gaze_text = "GAZING"
                 # In gaze state, display video playing status
-                cv2.putText(frame, "VIDEO: PLAYING", (frame.shape[1] - 200, 30),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                cv2.putText(frame, "VIDEO: PLAYING", (frame.shape[1] - 250, right_panel_top),
+                           cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 3)
                 # In gaze state, blinking does not pause video
                 if detection_result['is_blinking']:
-                    cv2.putText(frame, "BLINK (GAZING)", (frame.shape[1] - 200, 60),
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                    cv2.putText(frame, "BLINK (GAZING)", (frame.shape[1] - 250, right_panel_top + right_line_gap),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 165, 255), 3)
             else:
                 gaze_color = (0, 0, 255)
                 gaze_text = "NOT GAZING"
                 # In non-gaze state, display video paused status
-                cv2.putText(frame, "VIDEO: PAUSED", (frame.shape[1] - 200, 30),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                cv2.putText(frame, "VIDEO: PAUSED", (frame.shape[1] - 250, right_panel_top),
+                           cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 3)
                 # In non-gaze state, blinking causes video to pause
                 if detection_result['is_blinking']:
-                    cv2.rectangle(frame, (frame.shape[1] - 200, 60), (frame.shape[1] - 10, 100), (0, 0, 255), -1)
-                    cv2.putText(frame, "BLINK (PAUSED)", (frame.shape[1] - 190, 90),
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                    blink_top = right_panel_top + right_line_gap - 20
+                    cv2.rectangle(frame, (frame.shape[1] - 250, blink_top), (frame.shape[1] - 10, blink_top + 50), (0, 0, 255), -1)
+                    cv2.putText(frame, "BLINK (PAUSED)", (frame.shape[1] - 240, blink_top + 35),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 3)
             
-            cv2.putText(frame, f"Gaze: {gaze_text}", (10, frame.shape[0] - 90),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, gaze_color, 2)
+            cv2.putText(frame, f"Gaze: {gaze_text}", (10, base_bottom_y - bottom_line_gap),
+                       cv2.FONT_HERSHEY_SIMPLEX, 1.0, gaze_color, 3)
             
             # Display gaze counter (for debugging)
             cv2.putText(frame, f"Gaze Confirm: {self.gazing_confirm_counter}/{self.GAZING_CONFIRMATION_FRAMES}", 
-                       (10, frame.shape[0] - 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+                       (10, base_bottom_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 2)
             
             # Display FPS
             # cv2.putText(frame, f"FPS: {detection_result['fps']:.1f}", (10, 30),

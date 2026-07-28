@@ -5,7 +5,7 @@ import subprocess
 import signal
 import av
 from PySide6.QtCore import QThread, Signal
-from log import debug, error
+from log import debug, error, debug_throttled, error_throttled
 
 class VideoPlayerThread(QThread):
     """Stable video player thread using PyAV with proper synchronization"""
@@ -122,6 +122,12 @@ class VideoPlayerThread(QThread):
                     #   f"{self.video_width}x{self.video_height}, "
                     #   f"{self.video_fps:.2f} fps, "
                     #   f"{self.video_duration:.2f}s")
+                debug(
+                    f"Loaded video: {os.path.basename(file_path)}, "
+                    f"{self.video_width}x{self.video_height}, "
+                    f"{self.video_fps:.2f} fps, "
+                    f"{self.video_duration:.2f}s"
+                )
                 
             # Prepare video information
             video_info = {
@@ -302,27 +308,34 @@ class VideoPlayerThread(QThread):
     def play(self):
         """Start playback"""
         with self._lock:
+            was_stopped = self.stopped
+            was_paused = self.paused
             if self.stopped:
                 # Starting from beginning or paused position
-                self.play_start_time = time.time() - self._pause_position
-                self.base_timestamp = self._pause_position
-            elif self.paused:
-                # Resuming from pause
-                self.accumulated_pause_time += (time.time() - self.last_pause_start)
-                self.play_start_time = time.time() - self.base_timestamp - self.accumulated_pause_time
-            
+                self.accumulated_pause_time = 0
+                self.last_pause_start = 0
             self.playing = True
             self.paused = False
             self.stopped = False
-            
+
+            # Ensure playback timing is based on the current base timestamp.
+            self.play_start_time = time.time() - self.base_timestamp
+            self.accumulated_pause_time = 0
+
+            # Force frame pipeline to restart from current base timestamp.
+            if was_stopped or was_paused:
+                self.seek_requested = True
+                self.seek_timestamp = self.base_timestamp
+                self.seek_target = int(self.seek_timestamp * self.video_fps) if self.video_fps > 0 else 0
+
             # Start audio if available
             if self.container:
                 has_audio = any(stream.type == 'audio' for stream in self.container.streams)
                 if has_audio:
                     self._start_audio(self.base_timestamp)
-            
-            #debug(f"Play started at position: {self.base_timestamp:.2f}s")
-    
+
+            debug(f"Play started at position: {self.base_timestamp:.2f}s")
+
     def pause(self):
         """Pause playback"""
         with self._lock:
@@ -341,7 +354,7 @@ class VideoPlayerThread(QThread):
             
             self.paused = True
             self.playing = False
-            #debug(f"Playback paused at position: {self.base_timestamp:.2f}s")
+            debug(f"Playback paused at position: {self.base_timestamp:.2f}s")
     
     def stop(self):
         """Stop playback"""
@@ -358,7 +371,7 @@ class VideoPlayerThread(QThread):
             self.frame_count = 0
             
             self._stop_audio_process()
-            #debug("Playback stopped")
+            debug("Playback stopped")
     
     def get_position(self):
         """Get current playback position (0.0 to 1.0)"""
@@ -367,10 +380,11 @@ class VideoPlayerThread(QThread):
                 if self.playing:
                     current_time = time.time()
                     elapsed = current_time - self.play_start_time - self.accumulated_pause_time
-                    position = min(elapsed / self.video_duration, 1.0)
-                    return position
+                    position = elapsed / self.video_duration
+                    return max(0.0, min(position, 1.0))
                 else:
-                    return min(self.base_timestamp / self.video_duration, 1.0)
+                    position = self.base_timestamp / self.video_duration
+                    return max(0.0, min(position, 1.0))
         return 0.0
     
     def seek(self, frame_number):
@@ -404,7 +418,7 @@ class VideoPlayerThread(QThread):
             else:
                 self._pause_position = self.seek_timestamp
             
-            #debug(f"Seek to frame {frame_number}, time: {self.seek_timestamp:.2f}s")
+            debug_throttled("seek_operation", f"Seek to frame {frame_number}, time: {self.seek_timestamp:.2f}s", 0.2)
     
     def run(self):
         """Main playback loop with precise timing"""
@@ -421,6 +435,9 @@ class VideoPlayerThread(QThread):
                 seek_timestamp = self.seek_timestamp
                 
             if stopped or not playing or paused:
+                frame_generator = None
+                if stopped:
+                    current_frame_time = 0
                 time.sleep(0.01)
                 continue
                 
@@ -457,7 +474,7 @@ class VideoPlayerThread(QThread):
                     self.container.seek(int(current_frame_time * 1000000))
                     frame_generator = self._get_next_frame_sequence()
                 except Exception as e:
-                    error(f"Error initializing frame generator: {e}")
+                    error_throttled("player_init_generator_error", f"Error initializing frame generator: {e}", 2.0)
                     time.sleep(0.01)
                     continue
             
@@ -506,7 +523,7 @@ class VideoPlayerThread(QThread):
                     #debug("Playback finished (end of stream)")
                     continue
                 except Exception as e:
-                    error(f"Error getting frame: {e}")
+                    error_throttled("player_get_frame_error", f"Error getting frame: {e}", 2.0)
                     # Reset generator and try again
                     frame_generator = None
                     time.sleep(0.01)

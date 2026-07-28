@@ -11,8 +11,15 @@ class FullScreenPlayer(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent_window = parent
+        self.is_slider_pressed = False
         self.setup_ui()
         self.setup_style()
+
+    def tr(self, en_text, zh_text):
+        is_en = True
+        if self.parent_window and hasattr(self.parent_window, "current_language"):
+            is_en = self.parent_window.current_language == "en"
+        return en_text if is_en else zh_text
         
     def setup_ui(self):
         # Set window flags to make it a full screen window
@@ -24,7 +31,7 @@ class FullScreenPlayer(QWidget):
         main_layout.setSpacing(0)
         
         # Video display area
-        self.video_label = QLabel("Loading video...")
+        self.video_label = QLabel(self.tr("Loading video...", "正在加载视频..."))
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setStyleSheet("""
             QLabel {
@@ -84,18 +91,18 @@ class FullScreenPlayer(QWidget):
         self.control_bar = QWidget()
         self.control_bar.setObjectName("control_bar")
         self.control_bar.setFixedHeight(80)
-        self.control_bar.hide()
+        self.control_bar.show()
         
         control_layout = QHBoxLayout(self.control_bar)
         control_layout.setContentsMargins(20, 0, 20, 20)
         
         # Back button
-        self.back_btn = QPushButton("Back")
+        self.back_btn = QPushButton(self.tr("Back", "返回"))
         self.back_btn.setFixedSize(100, 40)
         self.back_btn.clicked.connect(self.exit_fullscreen)
         
         # Play/Pause button
-        self.play_pause_btn = QPushButton("Pause")
+        self.play_pause_btn = QPushButton(self.tr("Pause", "暂停"))
         self.play_pause_btn.setFixedSize(100, 40)
         self.play_pause_btn.clicked.connect(self.toggle_play_pause)
         
@@ -103,13 +110,16 @@ class FullScreenPlayer(QWidget):
         self.progress_slider = QSlider(Qt.Horizontal)
         self.progress_slider.setRange(0, 1000)
         self.progress_slider.setValue(0)
+        self.progress_slider.sliderMoved.connect(self.on_progress_slider_moved)
+        self.progress_slider.sliderPressed.connect(self.on_progress_slider_pressed)
+        self.progress_slider.sliderReleased.connect(self.on_progress_slider_released)
         
         # Time label
         self.time_label = QLabel("00:00 / 00:00")
         self.time_label.setStyleSheet("color: #ffffff; font-size: 14px;")
         
         # Status label (display recognition status)
-        self.status_label = QLabel("Detecting...")
+        self.status_label = QLabel(self.tr("Detecting...", "检测中..."))
         self.status_label.setStyleSheet("""
             QLabel {
                 color: #ffffff;
@@ -137,6 +147,8 @@ class FullScreenPlayer(QWidget):
         # Control bar show/hide animation
         self.control_animation = QPropertyAnimation(self.control_bar, b"windowOpacity")
         self.control_animation.setDuration(300)
+        self._hiding_controls = False
+        self.control_animation.finished.connect(self._on_control_animation_finished)
         
         # Status label timer (auto-hide)
         self.status_timer = QTimer()
@@ -191,7 +203,15 @@ class FullScreenPlayer(QWidget):
     def showEvent(self, event):
         """Window show event"""
         super().showEvent(event)
+        self.back_btn.setText(self.tr("Back", "返回"))
+        if self.parent_window and self.parent_window.video_player_thread.playing and not self.parent_window.video_player_thread.paused:
+            self.play_pause_btn.setText(self.tr("Pause", "暂停"))
+        else:
+            self.play_pause_btn.setText(self.tr("Play", "播放"))
         self.showFullScreen()
+        self.control_bar.show()
+        self.control_bar.setWindowOpacity(1)
+        self.mouse_timer.stop()
         # Ensure controls are properly sized in fullscreen mode
         self.adjust_overlay_positions()
         
@@ -214,25 +234,32 @@ class FullScreenPlayer(QWidget):
         """Mouse move event - show control bar"""
         super().mouseMoveEvent(event)
         self.show_controls()
+
+    def mousePressEvent(self, event: QMouseEvent):
+        """Mouse press event - show control bar"""
+        super().mousePressEvent(event)
+        self.show_controls()
         
     def show_controls(self):
         """Show control bar"""
+        self._hiding_controls = False
+        self.control_animation.stop()
         if not self.control_bar.isVisible():
             self.control_bar.show()
             self.control_animation.setStartValue(0)
             self.control_animation.setEndValue(1)
             self.control_animation.start()
-        
-        # Reset hide timer
+        else:
+            self.control_bar.setWindowOpacity(1)
         self.mouse_timer.stop()
-        self.mouse_timer.start(3000)  # Hide after 3 seconds
         
     def hide_controls(self):
         """Hide control bar"""
-        self.control_animation.setStartValue(1)
-        self.control_animation.setEndValue(0)
-        self.control_animation.finished.connect(lambda: self.control_bar.hide())
-        self.control_animation.start()
+        return
+
+    def _on_control_animation_finished(self):
+        if self._hiding_controls:
+            self.control_bar.hide()
         
     def show_status(self, message, duration=2000):
         """Show status message"""
@@ -277,60 +304,62 @@ class FullScreenPlayer(QWidget):
         self.status_overlay.hide()
         
     def update_detection_status(self, detection_result):
-        """Update detection status display"""
+        """Update detection status display - avoid duplicate overlays"""
         if detection_result and detection_result.get('face_detected', False):
             eyes_closed = detection_result.get('eyes_closed', False)
             is_gazing = detection_result.get('is_gazing', False)
-            
+            playback_text = self.tr("Paused", "已暂停") if eyes_closed or not is_gazing else self.tr("Playing", "播放中")
+
             if eyes_closed:
-                self.show_status("Eyes closed - Video paused", 1000)
                 self.show_overlays(
-                    detection_text="Eyes closed", 
-                    playback_text="Paused",
-                    status_text="Eyes closed"
+                    detection_text=playback_text,
+                    playback_text=self.tr("Not gazing", "未注视"),
+                    status_text=self.tr("Eyes closed", "闭眼")
                 )
             elif not is_gazing:
-                self.show_status("Not gazing at screen - Video paused", 1000)
                 self.show_overlays(
-                    detection_text="Not gazing", 
-                    playback_text="Paused",
-                    status_text="Not gazing at screen"
+                    detection_text=playback_text,
+                    playback_text=self.tr("Not gazing", "未注视"),
+                    status_text=self.tr("Eyes open", "睁眼")
                 )
             else:
-                self.show_status("Gazing - Video playing", 1000)
                 self.show_overlays(
-                    detection_text="Gazing", 
-                    playback_text="Playing",
-                    status_text="Gazing at screen"
+                    detection_text=playback_text,
+                    playback_text=self.tr("Gazing", "注视中"),
+                    status_text=self.tr("Eyes open", "睁眼")
                 )
         else:
-            self.show_status("No face detected - Video paused", 1000)
             self.show_overlays(
-                detection_text="No face detected", 
-                playback_text="Paused",
-                status_text="No face detected"
+                detection_text=self.tr("Paused", "已暂停"),
+                playback_text=self.tr("No face detected", "未检测到人脸")
             )
         
     def exit_fullscreen(self):
         """Exit full screen mode"""
-        self.close()
+        self.hide()
         if self.parent_window:
+            self.parent_window.is_in_fullscreen_mode = False
+            self.parent_window.is_fullscreen = False
+            self.parent_window.fullscreen_btn.setText(self.tr("Fullscreen", "全屏"))
             self.parent_window.showNormal()
             self.parent_window.show()
+
+    def closeEvent(self, event):
+        """Ensure parent state resets even when window is closed by system actions."""
+        if self.parent_window:
+            self.parent_window.is_in_fullscreen_mode = False
+            self.parent_window.is_fullscreen = False
+            self.parent_window.fullscreen_btn.setText(self.tr("Fullscreen", "全屏"))
+        super().closeEvent(event)
             
     def toggle_play_pause(self):
         """Toggle play/pause"""
         if self.parent_window:
             if self.parent_window.video_player_thread.playing and not self.parent_window.video_player_thread.paused:
                 self.parent_window.pause_video()
-                self.play_pause_btn.setText("Play")
-                self.show_status("Paused")
-                self.show_overlays(playback_text="Paused")
+                # Don't duplicate UI feedback - let parent handle overlays via detection_status
             else:
                 self.parent_window.play_video()
-                self.play_pause_btn.setText("Pause")
-                self.show_status("Playing")
-                self.show_overlays(playback_text="Playing")
                 
     def update_video_frame(self, frame):
         """Update video frame"""
@@ -339,7 +368,7 @@ class FullScreenPlayer(QWidget):
             
     def update_progress(self, position, duration):
         """Update progress slider and time display"""
-        if not self.progress_slider.isSliderDown():  # If user is not dragging the slider
+        if not self.is_slider_pressed and not self.progress_slider.isSliderDown():
             self.progress_slider.setValue(int(position * 1000))
             
         # Update time display
@@ -347,6 +376,30 @@ class FullScreenPlayer(QWidget):
         current_str = f"{int(current_time // 60):02d}:{int(current_time % 60):02d}"
         total_str = f"{int(duration // 60):02d}:{int(duration % 60):02d}"
         self.time_label.setText(f"{current_str} / {total_str}")
+
+    def on_progress_slider_pressed(self):
+        """Handle progress slider press in fullscreen mode"""
+        self.is_slider_pressed = True
+
+    def on_progress_slider_moved(self, value):
+        """Handle progress slider move in fullscreen mode"""
+        if self.parent_window and self.parent_window.video_loaded and self.is_slider_pressed:
+            position = value / 1000.0
+            duration = self.parent_window.video_duration
+            self.parent_window.progress_slider.setValue(value)
+            self.parent_window.update_time_label(position * duration, duration)
+            self.update_progress(position, duration)
+    
+    def on_progress_slider_released(self):
+        """Handle progress slider release in fullscreen mode"""
+        if self.parent_window and self.parent_window.video_loaded:
+            position = self.progress_slider.value() / 1000.0
+            duration = self.parent_window.video_duration
+            self.parent_window.video_player_thread.seek(int(position * self.parent_window.video_player_thread.total_frames))
+            self.parent_window.progress_slider.setValue(self.progress_slider.value())
+            self.parent_window.update_time_label(position * duration, duration)
+            self.update_progress(position, duration)
+        self.is_slider_pressed = False
 
     def adjust_overlay_positions(self):
         """Adjust overlay positions to avoid overlap"""
