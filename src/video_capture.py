@@ -3,7 +3,7 @@ import time
 import threading
 from PySide6.QtCore import QThread, Signal
 from eye_detector import MediaPipeEyeDetector
-from log import debug,error
+from log import debug, error, debug_throttled, error_throttled
 
 
 class VideoCaptureThread(QThread):
@@ -68,6 +68,8 @@ class VideoCaptureThread(QThread):
             camera_id = self.find_available_camera()
             if camera_id is None:
                 error("No available camera device found, waiting for camera reconnect")
+        else:
+            debug(f"start_capture requested, camera_id={camera_id}")
 
         #debug(f"Starting camera capture on device ID: {camera_id}")
 
@@ -98,8 +100,8 @@ class VideoCaptureThread(QThread):
                 pass
             return False
 
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         cap.set(cv2.CAP_PROP_FPS, 30)
         with self._lock:
             self._release_capture_only()
@@ -123,7 +125,7 @@ class VideoCaptureThread(QThread):
                 self._closed = True
 
     def stop_capture(self):
-        #debug("Stopping camera capture...")
+        debug("Stopping camera capture")
         with self._lock:
             self.running = False
             self.exiting = True
@@ -189,6 +191,7 @@ class VideoCaptureThread(QThread):
                     if next_camera_id is None:
                         next_camera_id = self.find_available_camera()
                     if next_camera_id is not None:
+                        debug_throttled("camera_reconnect_attempt", f"Trying reconnect camera_id={next_camera_id}", 2.0)
                         self._open_capture(next_camera_id)
                 time.sleep(0.1)
                 continue
@@ -203,7 +206,7 @@ class VideoCaptureThread(QThread):
                     try:
                         ret, frame = self.cap.read()
                     except Exception as e:
-                        error(f"Error reading frame: {e}")
+                        error_throttled("capture_read_exception", f"Error reading frame: {e}", 2.0)
                         ret = False
 
                 if ret and frame is not None:
@@ -255,11 +258,11 @@ class VideoCaptureThread(QThread):
                                 else:
                                     command = "play"
                             else:
-                                # Pause video if no face detected for over 1 second
+                                # Pause video if no face detected for over 0.5 seconds (faster re-engagement)
                                 last_face_time = 0
                                 with self._lock:
                                     last_face_time = self.last_face_detected_time
-                                if current_time - last_face_time > 1.0:
+                                if current_time - last_face_time > 0.5:
                                     command = "pause"
 
                             # Draw landmarks (optional)
@@ -278,7 +281,7 @@ class VideoCaptureThread(QThread):
                                     self.last_command = command
 
                         except Exception as e:
-                            error(f"Detection error: {e}")
+                            error_throttled("capture_detection_error", f"Detection error: {e}", 2.0)
                             # Emit empty status to indicate detection failure
                             self.detection_status.emit({})
                     else:
@@ -288,16 +291,16 @@ class VideoCaptureThread(QThread):
                     # Emit frame ready signal
                     self.frame_ready.emit(processed_frame)
 
-                    time.sleep(0.03)  # ~30 FPS
+                    time.sleep(0.015)  # ~60 FPS for detection (2x faster detection polling)
                 else:
                     read_failures += 1
                     if read_failures >= 30:
-                        error("Cannot read frame from camera, waiting for reconnect")
+                        error_throttled("capture_read_failure", "Cannot read frame from camera, waiting for reconnect", 5.0)
                         self._release_capture_only()
                         read_failures = 0
                     time.sleep(0.03)
             except Exception as e:
-                error(f"Error in camera capture loop: {e}")
+                error_throttled("capture_loop_exception", f"Error in camera capture loop: {e}", 2.0)
                 break
 
         # Release resources when thread exits
