@@ -30,6 +30,8 @@ from PySide6.QtWidgets import (
     QSlider,
     QSizePolicy,
     QSplitter,
+    QScrollArea,
+    QFrame,
 )
 from PySide6.QtCore import Qt, QTimer, QThread, Signal, QPropertyAnimation
 from PySide6.QtGui import QImage, QPixmap, QKeyEvent, QMouseEvent
@@ -298,7 +300,11 @@ class HybridCaptureThread(QThread):
                 self.gesture_detector = None
 
         display_frame = cv2.flip(processed_frame, 1)
+        self._draw_gesture_hud(display_frame, command)
 
+        return display_frame, detection_result, command
+
+    def _draw_gesture_hud(self, display_frame, command, advance=True):
         # Draw HUD text on display frame (mirrors gesture VideoCaptureThread)
         _cmd_labels = {
             'play': 'Play', 'pause': 'Pause', 'toggle': 'Play/Pause',
@@ -307,7 +313,8 @@ class HybridCaptureThread(QThread):
         }
         if command is None:
             if self.hud_frame_remain > 0:
-                self.hud_frame_remain -= 1
+                if advance:
+                    self.hud_frame_remain -= 1
                 hud_cmd_label = _cmd_labels.get(self.hud_command_remain, 'Waiting')
                 hud_state = 'Engaged'
             else:
@@ -324,8 +331,6 @@ class HybridCaptureThread(QThread):
         (tw, th), bl = cv2.getTextSize(hud_text, font, 0.7, 2)
         cv2.rectangle(display_frame, (8, 8), (tw + 16, th + bl + 14), (0, 0, 0), -1)
         cv2.putText(display_frame, hud_text, (12, th + 12), font, 0.7, (0, 230, 118), 2, cv2.LINE_AA)
-
-        return display_frame, detection_result, command
 
     def _process_eye_frame(self, frame, show_landmarks):
         processed_frame = self._prepare_frame(frame, self.eye_proc_width)
@@ -427,6 +432,7 @@ class HybridCaptureThread(QThread):
                             self._emit_command_if_needed(mode, command)
                         else:
                             display_frame = cv2.flip(self._prepare_frame(frame, self.gesture_proc_width), 1)
+                            self._draw_gesture_hud(display_frame, None, advance=False)
                     else:
                         display_frame, detection_result, command = self._process_eye_frame(frame, show_landmarks)
                         self.detection_status.emit(detection_result or {})
@@ -452,6 +458,7 @@ class MultiModeFullScreenPlayer(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent_window = parent
+        self.target_screen = None
         self.is_slider_pressed = False
         self.setup_ui()
         self.setup_style()
@@ -479,6 +486,7 @@ class MultiModeFullScreenPlayer(QWidget):
 
         self.detection_overlay = QLabel(self.video_label)
         self.detection_overlay.setAlignment(Qt.AlignCenter)
+        self.detection_overlay.setWordWrap(True)
         self.detection_overlay.setStyleSheet(
             "QLabel { color: #f8fafc; font-size: 24px; font-weight: bold; background-color: rgba(15, 23, 42, 200); border-radius: 10px; padding: 10px; }"
         )
@@ -486,6 +494,7 @@ class MultiModeFullScreenPlayer(QWidget):
 
         self.playback_status_overlay = QLabel(self.video_label)
         self.playback_status_overlay.setAlignment(Qt.AlignCenter)
+        self.playback_status_overlay.setWordWrap(True)
         self.playback_status_overlay.setStyleSheet(
             "QLabel { color: #86efac; font-size: 24px; font-weight: bold; background-color: rgba(15, 23, 42, 200); border-radius: 10px; padding: 10px; }"
         )
@@ -493,23 +502,24 @@ class MultiModeFullScreenPlayer(QWidget):
 
         self.status_overlay = QLabel(self.video_label)
         self.status_overlay.setAlignment(Qt.AlignCenter)
+        self.status_overlay.setWordWrap(True)
         self.status_overlay.setStyleSheet(
             "QLabel { color: #fde68a; font-size: 20px; background-color: rgba(15, 23, 42, 200); border-radius: 10px; padding: 10px; }"
         )
         self.status_overlay.hide()
 
         self.control_bar = QWidget()
-        self.control_bar.setFixedHeight(82)
+        self.control_bar.setMinimumHeight(72)
         control_layout = QHBoxLayout(self.control_bar)
         control_layout.setContentsMargins(20, 0, 20, 18)
         control_layout.setSpacing(14)
 
         self.back_btn = QPushButton(self.tr("Back", "返回"))
-        self.back_btn.setFixedSize(100, 40)
+        self.back_btn.setMinimumSize(92, 36)
         self.back_btn.clicked.connect(self.exit_fullscreen)
 
         self.play_pause_btn = QPushButton(self.tr("Pause", "暂停"))
-        self.play_pause_btn.setFixedSize(100, 40)
+        self.play_pause_btn.setMinimumSize(92, 36)
         self.play_pause_btn.clicked.connect(self.toggle_play_pause)
 
         self.progress_slider = QSlider(Qt.Horizontal)
@@ -520,8 +530,11 @@ class MultiModeFullScreenPlayer(QWidget):
 
         self.time_label = QLabel("00:00 / 00:00")
         self.time_label.setStyleSheet("color: #ffffff; font-size: 14px;")
+        self.time_label.setMinimumWidth(120)
 
         self.status_label = QLabel(self.tr("Detecting...", "检测中..."))
+        self.status_label.setWordWrap(True)
+        self.status_label.setMinimumWidth(130)
         self.status_label.setStyleSheet(
             "QLabel { color: #e2e8f0; font-size: 14px; padding: 5px 10px; background-color: rgba(15, 23, 42, 170); border-radius: 5px; }"
         )
@@ -551,6 +564,8 @@ class MultiModeFullScreenPlayer(QWidget):
         self.overlay_timer = QTimer()
         self.overlay_timer.timeout.connect(self.hide_overlays)
         self.overlay_timer.setSingleShot(True)
+
+        self._apply_responsive_layout()
 
     def setup_style(self):
         self.setStyleSheet(
@@ -595,11 +610,71 @@ class MultiModeFullScreenPlayer(QWidget):
             self.play_pause_btn.setText(self.tr("Pause", "暂停"))
         else:
             self.play_pause_btn.setText(self.tr("Play", "播放"))
+
+        target_screen = self._resolve_target_screen()
+        if target_screen:
+            self.setGeometry(target_screen.geometry())
+
         self.showFullScreen()
         self._hiding_controls = False
         self.control_animation.stop()
         self.control_bar.show()
         self.control_bar.setWindowOpacity(1)
+        self._apply_responsive_layout()
+        self.adjust_overlay_positions()
+
+    def set_target_screen(self, screen):
+        self.target_screen = screen
+
+    def _resolve_target_screen(self):
+        if self.target_screen is not None:
+            return self.target_screen
+
+        if self.parent_window and hasattr(self.parent_window, "_resolve_target_screen"):
+            screen = self.parent_window._resolve_target_screen()
+            if screen is not None:
+                return screen
+
+        window_handle = self.windowHandle()
+        if window_handle and window_handle.screen():
+            return window_handle.screen()
+
+        screen = QApplication.screenAt(self.frameGeometry().center())
+        return screen or QApplication.primaryScreen()
+
+    def _apply_responsive_layout(self):
+        width = max(self.width(), 1)
+        height = max(self.height(), 1)
+        scale = min(width / 1920.0, height / 1080.0)
+        scale = max(0.85, min(1.45, scale))
+
+        control_height = max(72, min(112, int(82 * scale)))
+        button_height = max(36, min(56, int(40 * scale)))
+        button_width = max(92, min(170, int(100 * scale)))
+        font_size = max(13, min(20, int(14 * scale)))
+        overlay_font_size = max(17, min(34, int(24 * scale)))
+        status_overlay_font_size = max(15, min(30, int(20 * scale)))
+
+        self.control_bar.setFixedHeight(control_height)
+        self.back_btn.setMinimumSize(button_width, button_height)
+        self.play_pause_btn.setMinimumSize(button_width, button_height)
+        self.time_label.setStyleSheet(f"color: #ffffff; font-size: {font_size}px;")
+        self.status_label.setStyleSheet(
+            f"QLabel {{ color: #e2e8f0; font-size: {font_size}px; padding: 5px 10px; background-color: rgba(15, 23, 42, 170); border-radius: 5px; }}"
+        )
+        self.detection_overlay.setStyleSheet(
+            f"QLabel {{ color: #f8fafc; font-size: {overlay_font_size}px; font-weight: bold; background-color: rgba(15, 23, 42, 200); border-radius: 10px; padding: 10px; }}"
+        )
+        self.playback_status_overlay.setStyleSheet(
+            f"QLabel {{ color: #86efac; font-size: {overlay_font_size}px; font-weight: bold; background-color: rgba(15, 23, 42, 200); border-radius: 10px; padding: 10px; }}"
+        )
+        self.status_overlay.setStyleSheet(
+            f"QLabel {{ color: #fde68a; font-size: {status_overlay_font_size}px; background-color: rgba(15, 23, 42, 200); border-radius: 10px; padding: 10px; }}"
+        )
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_responsive_layout()
         self.adjust_overlay_positions()
 
     def keyPressEvent(self, event: QKeyEvent):
@@ -611,6 +686,9 @@ class MultiModeFullScreenPlayer(QWidget):
             if self.isFullScreen():
                 self.showNormal()
             else:
+                target_screen = self._resolve_target_screen()
+                if target_screen:
+                    self.setGeometry(target_screen.geometry())
                 self.showFullScreen()
         else:
             super().keyPressEvent(event)
@@ -769,39 +847,57 @@ class MultiModeFullScreenPlayer(QWidget):
         if self.parent_window and self.parent_window.video_loaded:
             position = self.progress_slider.value() / 1000.0
             duration = self.parent_window.video_duration
-            self.parent_window.video_player_thread.seek(
-                int(position * self.parent_window.video_player_thread.total_frames)
-            )
+            target_frame = int(position * self.parent_window.video_player_thread.total_frames)
+            self.parent_window.video_player_thread.seek(target_frame)
             self.parent_window.progress_slider.setValue(self.progress_slider.value())
             self.parent_window.update_time_label(position * duration, duration)
+            if not self.parent_window.video_player_thread.playing:
+                self.parent_window.preview_frame_at(target_frame)
             self.update_progress(position, duration)
         self.is_slider_pressed = False
 
     def adjust_overlay_positions(self):
         video_rect = self.video_label.rect()
+        if video_rect.width() <= 0 or video_rect.height() <= 0:
+            return
+
+        margin = max(12, min(24, int(min(video_rect.width(), video_rect.height()) * 0.02)))
+        top_overlay_max_width = max(200, int(video_rect.width() * 0.38))
+        bottom_overlay_max_width = max(260, int(video_rect.width() * 0.62))
 
         if self.detection_overlay.isVisible():
+            self.detection_overlay.setMaximumWidth(top_overlay_max_width)
             self.detection_overlay.adjustSize()
             size = self.detection_overlay.sizeHint()
-            self.detection_overlay.setGeometry(20, 20, size.width(), size.height())
+            width = min(size.width(), top_overlay_max_width)
+            x = margin
+            y = margin
+            self.detection_overlay.setGeometry(x, y, width, size.height())
 
         if self.playback_status_overlay.isVisible():
+            self.playback_status_overlay.setMaximumWidth(top_overlay_max_width)
             self.playback_status_overlay.adjustSize()
             size = self.playback_status_overlay.sizeHint()
+            width = min(size.width(), top_overlay_max_width)
+            x = max(margin, video_rect.width() - width - margin)
             self.playback_status_overlay.setGeometry(
-                video_rect.width() - size.width() - 20,
-                20,
-                size.width(),
+                x,
+                margin,
+                width,
                 size.height(),
             )
 
         if self.status_overlay.isVisible():
+            self.status_overlay.setMaximumWidth(bottom_overlay_max_width)
             self.status_overlay.adjustSize()
             size = self.status_overlay.sizeHint()
+            width = min(size.width(), bottom_overlay_max_width)
+            x = max(margin, (video_rect.width() - width) // 2)
+            y = max(margin, video_rect.height() - size.height() - margin)
             self.status_overlay.setGeometry(
-                (video_rect.width() - size.width()) // 2,
-                video_rect.height() - size.height() - 20,
-                size.width(),
+                x,
+                y,
+                width,
                 size.height(),
             )
 
@@ -811,6 +907,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.current_language = "en"
         self.current_mode = "gesture"
+        self._windowed_geometry = None
+        self.root_layout = None
+        self.panels_layout = None
 
         self.video_player_thread = VideoPlayerThread()
         self.capture_thread = HybridCaptureThread(mode=self.current_mode)
@@ -982,25 +1081,26 @@ class MainWindow(QMainWindow):
 
     def init_ui(self):
         self.setWindowTitle("Remote Control Hub")
-        screen = QApplication.primaryScreen()
+        screen = self._resolve_target_screen()
         geometry = screen.availableGeometry()
-        width = int(geometry.width() * 0.9)
-        height = int(geometry.height() * 0.9)
+        width = min(max(1200, int(geometry.width() * 0.9)), geometry.width())
+        height = min(max(760, int(geometry.height() * 0.9)), geometry.height())
         self.setGeometry(
-            (geometry.width() - width) // 2,
-            (geometry.height() - height) // 2,
+            geometry.x() + (geometry.width() - width) // 2,
+            geometry.y() + (geometry.height() - height) // 2,
             width,
             height,
         )
+        self.setMinimumSize(1024, 680)
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-        root_layout = QHBoxLayout(central_widget)
-        root_layout.setContentsMargins(16, 16, 16, 16)
-        root_layout.setSpacing(16)
+        self.root_layout = QHBoxLayout(central_widget)
+        self.root_layout.setContentsMargins(16, 16, 16, 16)
+        self.root_layout.setSpacing(16)
 
         self.sidebar = self.build_sidebar()
-        root_layout.addWidget(self.sidebar, 0)
+        self.root_layout.addWidget(self.sidebar, 0)
 
         self.content_widget = QWidget()
         content_layout = QVBoxLayout(self.content_widget)
@@ -1011,23 +1111,25 @@ class MainWindow(QMainWindow):
         content_layout.addWidget(header)
 
         panels_widget = QWidget()
-        panels_layout = QHBoxLayout(panels_widget)
-        panels_layout.setContentsMargins(0, 0, 0, 0)
-        panels_layout.setSpacing(14)
-        control_panel = self.build_control_panel()
-        control_panel.setFixedWidth(550)
-        panels_layout.addWidget(self.build_display_panel(), 1)
-        panels_layout.addWidget(control_panel, 0)
+        self.panels_layout = QHBoxLayout(panels_widget)
+        self.panels_layout.setContentsMargins(0, 0, 0, 0)
+        self.panels_layout.setSpacing(14)
+        self.display_panel = self.build_display_panel()
+        self.control_panel = self.build_control_panel()
+        self.panels_layout.addWidget(self.display_panel, 3)
+        self.panels_layout.addWidget(self.control_panel, 2)
         content_layout.addWidget(panels_widget, 1)
 
-        root_layout.addWidget(self.content_widget, 1)
+        self.root_layout.addWidget(self.content_widget, 1)
 
         self.fullscreen_btn.setShortcut("F11")
+        self._apply_responsive_layout()
         self.apply_language()
 
     def build_sidebar(self):
         sidebar = QGroupBox()
-        sidebar.setFixedWidth(280)
+        sidebar.setMinimumWidth(180)
+        sidebar.setMaximumWidth(300)
         sidebar.setStyleSheet(
             "QGroupBox { background-color: #091122; border: 1px solid #1d4ed8; border-radius: 22px; margin-top: 0px; }"
         )
@@ -1102,15 +1204,15 @@ class MainWindow(QMainWindow):
         )
 
         self.language_btn = QPushButton("中文")
-        self.language_btn.setFixedHeight(38)
+        self.language_btn.setMinimumHeight(38)
         self.language_btn.clicked.connect(self.toggle_language)
 
         self.fullscreen_play_btn = QPushButton()
-        self.fullscreen_play_btn.setFixedHeight(38)
+        self.fullscreen_play_btn.setMinimumHeight(38)
         self.fullscreen_play_btn.clicked.connect(self.enter_fullscreen_play_mode)
 
         self.fullscreen_btn = QPushButton()
-        self.fullscreen_btn.setFixedHeight(38)
+        self.fullscreen_btn.setMinimumHeight(38)
         self.fullscreen_btn.clicked.connect(self.toggle_fullscreen)
 
         layout.addWidget(self.mode_badge)
@@ -1130,7 +1232,7 @@ class MainWindow(QMainWindow):
         self.camera_display = QLabel(self.tr("Starting camera...", "正在启动摄像头..."))
         self.camera_display.setAlignment(Qt.AlignCenter)
         self.camera_display.setScaledContents(True)
-        self.camera_display.setMinimumHeight(320)
+        self.camera_display.setMinimumHeight(160)
         self.camera_display.setStyleSheet(
             "QLabel { background-color: #020617; border-radius: 16px; border: 1px solid #233152; color: #ffffff; font-size: 15px; }"
         )
@@ -1142,7 +1244,7 @@ class MainWindow(QMainWindow):
         self.video_display = QLabel(self.tr("Click to select a video file", "点击选择视频文件"))
         self.video_display.setAlignment(Qt.AlignCenter)
         self.video_display.setScaledContents(True)
-        self.video_display.setMinimumHeight(320)
+        self.video_display.setMinimumHeight(160)
         self.video_display.setCursor(Qt.PointingHandCursor)
         self.video_display.setStyleSheet(
             "QLabel { background-color: #020617; border-radius: 16px; border: 1px solid #233152; color: #ffffff; font-size: 15px; }"
@@ -1184,11 +1286,11 @@ class MainWindow(QMainWindow):
         controls_layout.addWidget(self.progress_slider)
         controls_layout.addWidget(row)
 
-        video_layout.addWidget(self.video_display)
+        video_layout.addWidget(self.video_display, 1)
         video_layout.addWidget(video_controls)
 
-        layout.addWidget(self.camera_group)
-        layout.addWidget(self.video_group)
+        layout.addWidget(self.camera_group, 1)
+        layout.addWidget(self.video_group, 1)
         return panel
 
     def build_control_panel(self):
@@ -1205,7 +1307,7 @@ class MainWindow(QMainWindow):
         def _make_badge():
             lbl = QLabel()
             lbl.setObjectName("status_value")
-            lbl.setFixedHeight(28)
+            lbl.setMinimumHeight(28)
             lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             return lbl
 
@@ -1254,7 +1356,21 @@ class MainWindow(QMainWindow):
         self.instructions_label = QLabel()
         self.instructions_label.setWordWrap(True)
         self.instructions_label.setStyleSheet("color: #cbd5e1; line-height: 1.6; padding: 4px;")
-        instruction_layout.addWidget(self.instructions_label)
+        self.instructions_scroll = QScrollArea()
+        self.instructions_scroll.setWidgetResizable(True)
+        self.instructions_scroll.setFrameShape(QFrame.NoFrame)
+        self.instructions_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.instructions_scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; } QScrollArea > QWidget > QWidget { background: transparent; }"
+        )
+
+        scroll_content = QWidget()
+        scroll_layout = QVBoxLayout(scroll_content)
+        scroll_layout.setContentsMargins(0, 0, 0, 0)
+        scroll_layout.addWidget(self.instructions_label)
+        self.instructions_scroll.setWidget(scroll_content)
+
+        instruction_layout.addWidget(self.instructions_scroll)
 
         self.camera_control_group = QGroupBox()
         camera_control_layout = QVBoxLayout(self.camera_control_group)
@@ -1262,7 +1378,7 @@ class MainWindow(QMainWindow):
 
         self.camera_toggle_btn = QPushButton()
         self.camera_toggle_btn.clicked.connect(self.toggle_camera)
-        self.camera_toggle_btn.setFixedHeight(40)
+        self.camera_toggle_btn.setMinimumHeight(38)
 
         self.detect_checkbox = QCheckBox()
         self.detect_checkbox.setChecked(True)
@@ -1280,7 +1396,7 @@ class MainWindow(QMainWindow):
         file_layout = QVBoxLayout(self.file_control_group)
         self.select_video_btn = QPushButton()
         self.select_video_btn.clicked.connect(self.select_video)
-        self.select_video_btn.setFixedHeight(42)
+        self.select_video_btn.setMinimumHeight(40)
         file_layout.addWidget(self.select_video_btn)
 
         layout.addWidget(self.status_group)
@@ -1391,14 +1507,14 @@ class MainWindow(QMainWindow):
 
         self.gesture_mode_btn.setText(
             self.tr(
-                "01\nGesture Remote Control",
-                "01\n手势遥控\n通过手势控制视频播放",
+                "01\nGesture Remote",
+                "01\n手势遥控\n通过手势控制视频",
             )
         )
         self.eye_mode_btn.setText(
             self.tr(
-                "02\nEye Remote Control",
-                "02\n眼控遥控\n通过注视状态控制播放",
+                "02\nEye Remote",
+                "02\n眼控遥控\n通过注视状态控制",
             )
         )
 
@@ -1418,6 +1534,56 @@ class MainWindow(QMainWindow):
                 self.fullscreen_player.play_pause_btn.setText(self.tr("Pause", "暂停"))
             else:
                 self.fullscreen_player.play_pause_btn.setText(self.tr("Play", "播放"))
+
+        self._apply_responsive_layout()
+
+    def _resolve_target_screen(self):
+        window_handle = self.windowHandle()
+        if window_handle and window_handle.screen():
+            return window_handle.screen()
+
+        screen = QApplication.screenAt(self.frameGeometry().center())
+        return screen or QApplication.primaryScreen()
+
+    def _apply_responsive_layout(self):
+        if not self.root_layout:
+            return
+
+        width = max(self.width(), 1)
+        height = max(self.height(), 1)
+        compact = width < 1500 or height < 860
+
+        margin = 12 if compact else 16
+        spacing = 10 if compact else 16
+        panel_spacing = 10 if compact else 14
+
+        self.root_layout.setContentsMargins(margin, margin, margin, margin)
+        self.root_layout.setSpacing(spacing)
+        if self.panels_layout:
+            self.panels_layout.setSpacing(panel_spacing)
+
+        sidebar_width = max(180, min(280, int(width * 0.16)))
+        control_width = max(400, min(620, int(width * 0.35)))
+        self.sidebar.setFixedWidth(sidebar_width)
+        self.control_panel.setFixedWidth(control_width)
+
+        module_btn_height = max(84, min(116, int(height * 0.11)))
+        self.gesture_mode_btn.setMinimumHeight(module_btn_height)
+        self.eye_mode_btn.setMinimumHeight(module_btn_height)
+
+        top_btn_height = 38 if compact else 42
+        top_btn_width = 96 if compact else 116
+        self.language_btn.setMinimumSize(top_btn_width, top_btn_height)
+        self.fullscreen_play_btn.setMinimumSize(top_btn_width + 20, top_btn_height)
+        self.fullscreen_btn.setMinimumSize(top_btn_width + 10, top_btn_height)
+
+        control_btn_height = 36 if compact else 40
+        self.camera_toggle_btn.setMinimumHeight(control_btn_height)
+        self.select_video_btn.setMinimumHeight(control_btn_height)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_responsive_layout()
 
     def apply_mode_ui(self, reset_status=True):
         title, subtitle = self.mode_header()
@@ -1488,10 +1654,11 @@ class MainWindow(QMainWindow):
                 self._set_badge(self.aux_status_value_2, self.tr("Not Detected", "未检测"), "#334155", "#f8fafc")
 
     def _set_badge(self, label, text, background, color="#08111f"):
+        style = f"background-color: {background}; color: {color}; font-weight: 700; padding: 4px 10px; border-radius: 10px;"
+        if label.text() == text and label.styleSheet() == style:
+            return
         label.setText(text)
-        label.setStyleSheet(
-            f"background-color: {background}; color: {color}; font-weight: 700; padding: 4px 10px; border-radius: 10px;"
-        )
+        label.setStyleSheet(style)
 
     def command_display_text(self, command):
         labels = {
@@ -1687,7 +1854,13 @@ class MainWindow(QMainWindow):
                 new_time = max(0.0, min(self.video_duration, current_time + delta))
                 target_frame = int((new_time / max(self.video_duration, 0.001)) * self.video_player_thread.total_frames)
                 self.video_player_thread.seek(target_frame)
+                position = (new_time / self.video_duration) if self.video_duration > 0 else 0.0
+                self.progress_slider.setValue(int(position * 1000))
                 self.update_time_label(new_time, self.video_duration)
+                if self.is_in_fullscreen_mode and self.fullscreen_player:
+                    self.fullscreen_player.update_progress(position, self.video_duration)
+                if not self.video_player_thread.playing:
+                    self.preview_frame_at(target_frame)
             except Exception as exc:
                 error(f"Seek command failed: {exc}")
             return
@@ -1730,7 +1903,6 @@ class MainWindow(QMainWindow):
 
     def update_camera_frame(self, frame):
         self.display_frame(self.camera_display, frame)
-        self._update_camera_ui_state()
 
     def update_video_frame(self, frame):
         self.display_video_frame(frame)
@@ -1775,6 +1947,32 @@ class MainWindow(QMainWindow):
                 ret, frame = cap.read()
                 if ret and frame is not None:
                     self.fullscreen_player.update_video_frame(frame)
+        finally:
+            cap.release()
+
+    def preview_frame_at(self, target_frame):
+        """Refresh displayed frame immediately when player is not running."""
+        if not self.current_video_file or not os.path.exists(self.current_video_file):
+            return
+
+        frame_index = max(0, int(target_frame))
+        total_frames = int(getattr(self.video_player_thread, "total_frames", 0) or 0)
+        if total_frames > 0:
+            frame_index = min(frame_index, total_frames - 1)
+
+        cap = cv2.VideoCapture(self.current_video_file)
+        try:
+            if not cap.isOpened():
+                return
+
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+            ret, frame = cap.read()
+            if (not ret or frame is None) and frame_index > 0:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index - 1)
+                ret, frame = cap.read()
+
+            if ret and frame is not None:
+                self.display_video_frame(frame)
         finally:
             cap.release()
 
@@ -1877,8 +2075,11 @@ class MainWindow(QMainWindow):
     def on_progress_slider_released(self):
         if self.video_loaded:
             position = self.progress_slider.value() / 1000.0
-            self.video_player_thread.seek(int(position * self.video_player_thread.total_frames))
+            target_frame = int(position * self.video_player_thread.total_frames)
+            self.video_player_thread.seek(target_frame)
             self.update_time_label(position * self.video_duration, self.video_duration)
+            if not self.video_player_thread.playing:
+                self.preview_frame_at(target_frame)
             if self.is_in_fullscreen_mode and self.fullscreen_player:
                 self.fullscreen_player.update_progress(position, self.video_duration)
         self.is_slider_pressed = False
@@ -1900,9 +2101,15 @@ class MainWindow(QMainWindow):
     def toggle_fullscreen(self):
         if self.is_fullscreen:
             self.showNormal()
+            if self._windowed_geometry is not None:
+                self.setGeometry(self._windowed_geometry)
             self.fullscreen_btn.setText(self.tr("Fullscreen", "全屏"))
             self.is_fullscreen = False
         else:
+            self._windowed_geometry = self.geometry()
+            target_screen = self._resolve_target_screen()
+            if target_screen:
+                self.setGeometry(target_screen.geometry())
             self.showFullScreen()
             self.fullscreen_btn.setText(self.tr("Exit Fullscreen", "退出全屏"))
             self.is_fullscreen = True
@@ -1920,6 +2127,8 @@ class MainWindow(QMainWindow):
             self.fullscreen_player = MultiModeFullScreenPlayer(self)
             self.video_player_thread.frame_ready.connect(self.fullscreen_player.update_video_frame)
             self.capture_thread.detection_status.connect(self.fullscreen_player.update_detection_status)
+
+        self.fullscreen_player.set_target_screen(self._resolve_target_screen())
 
         if self.video_player_thread.playing and not self.video_player_thread.paused:
             self.fullscreen_player.play_pause_btn.setText(self.tr("Pause", "暂停"))
